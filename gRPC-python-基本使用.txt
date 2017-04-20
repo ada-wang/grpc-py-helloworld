@@ -1,0 +1,176 @@
+python version
+2.7.13
+
+gRPC version
+1.3.0.dev0
+
+----
+安装
+
+目前python的安装需要源码编译，而不能直接使用pip install
+github上issue里有这个未解决的问题，好像python3.6不受影响。
+
+首先，git clone gRPC
+然后，git submodule update --init，更新自模块。
+这里需要 hosts googlesource.com 支持
+
+然后，pip安装依赖 并 编译安装
+$ pip install -rrequirements.txt
+$ GRPC_PYTHON_BUILD_WITH_CYTHON=1 pip install .
+
+
+---- 原文
+$ export REPO_ROOT=grpc  # REPO_ROOT can be any directory of your choice
+$ git clone -b $(curl -L http://grpc.io/release) https://github.com/grpc/grpc $REPO_ROOT
+$ cd $REPO_ROOT
+$ git submodule update --init
+
+# For the next two commands do `sudo pip install` if you get permission-denied errors
+$ pip install -rrequirements.txt
+$ GRPC_PYTHON_BUILD_WITH_CYTHON=1 pip install .
+----
+
+----
+安装完毕后， pip list 就会有 grpcio  1.3.0.dev0
+这是grpc的module，
+然后pip install grpcio-tools
+得到 grpcio-tools  1.2.0，tools运行正常，可以正常把.proto编译
+
+----
+创建.proto文件
+与protobuf不同的是，有service声明，不仅仅是message了。
+然后，grpc使用proto3，所以，开头要声明syntax="proto3";
+讲解service类里的几个函数：
+rpc作为开头，然后是函数名字（输入参数message）返回（输出参数message）
+grpc有四类交互类型：
+unary_unary ---- 发送一个message，接收一个message
+unary_stream ---- 发送一个message，返回一个message的iterator(generator)
+stream_unary ---- 以上类推
+stream_stream
+
+syntax="proto3";
+
+package simpletest;
+
+service SimpleTest {
+    rpc GetOne (RequestOne) returns (ResponseOne);
+    rpc GetList (RequestOne) returns (stream ResponseList);
+    rpc PostList (stream RequestList) returns (ResponseOne);
+    rpc PostAndPost (stream RequestList) returns (stream ResponseList);
+}
+
+message RequestOne {
+    string hello = 1;
+}
+
+message ResponseOne {
+    string result = 1;
+}
+
+message RequestList {
+    string namelist = 1;
+}
+
+message ResponseList {
+    string resultlist = 1;
+}
+
+----
+server.py的写法
+
+首先创建server，并启动
+server = grpc.server(futures.ThreadPoolExecutor(max_workers=10))
+simple_test_pb2_grpc.add_SimpleTestServicer_to_server(
+    SimpleTestServicer(), server)
+server.add_insecure_port('[::]:50051')
+server.start()
+
+由于grpc的server比较傻X，得自己写一个死循环维持程序不退出
+
+_ONE_DAY_IN_SECONDS = 60 * 60 * 24
+try:
+    while 1:
+        time.sleep(_ONE_DAY_IN_SECONDS)
+        pass
+except KeyboardInterrupt:
+    server.stop(0)
+
+然后写server的处理class
+class SimpleTestServicer(simple_test_pb2_grpc.SimpleTestServicer)
+这个class里面类似web.py中的urls list对应的action处理class。
+
+然后在这个类里面实现.proto里声明的功能：
+对于一个函数功能，输入有self、request、context
+这里request根据unary或stream的不同，对应着message或者迭代器。
+具体来说GetOne这里里面，
+request type 是 simple_test_pb2.ResquestOne
+用request.hello 就能把hello这个标签里的数据取出来。（看.proto里有RequestOne message，里面有个hello）
+然后就是返回值，返回也是simple_test_pb2里的message对应的那些类
+这里，返回了simple_test_pb2.ResponseOne
+给message赋值，使用类初始化传参数，（result标签=内容）
+
+下面说迭代器形式的：
+unary_stream类型的，server拿到的是一个message，然后用yield把函数变成generator，yield每一个要返回的message。
+注意，迭代器给的是GetOne、PostList这些service函数，而不是传给simple_test_pb2.ResponseOne这种message！！！
+stream_unary类型的，也就是在client端弄个generator，然后把generator发给功能函数！！！
+
+class SimpleTestServicer(simple_test_pb2_grpc.SimpleTestServicer):
+    
+    def GetOne(self, request, context):
+        print "get request from client:"
+        print type(request)
+        print request
+        the_response = "Hello !! " + request.hello
+        return simple_test_pb2.ResponseOne(result=the_response)
+        pass
+
+    def GetList(self, request, context):
+        print "get request from client:"
+        print type(request)
+        print request
+        for x in xrange(5):
+            yield simple_test_pb2.ResponseList(resultlist="test" + str(x))
+            pass
+        pass
+
+    def PostList(self, request, context):
+        print "get request from client:"
+        print type(request)
+        for target_list in request:
+            print target_list
+            pass
+        return simple_test_pb2.ResponseOne(result="PostList OK")
+        pass
+
+    def PostAndPost(self, request, context):
+        pass
+    
+    pass
+
+----
+client端写法
+
+首先，连接上grpc的server
+
+channel = grpc.insecure_channel('localhost:50051')
+stub = simple_test_pb2_grpc.SimpleTestStub(channel)
+
+像这里stub就有
+stub.GetOne()
+stub.GetList()
+stub.PostList()
+stub.PostAndPost()
+这些功能
+
+然后，把simple_test_pb2.ResponseOne这样表示的message发给这些函数。
+对于stream型的发送，就给个generator
+
+def request_iterator():
+    for x in xrange(4):
+        print "x:", x
+        yield simple_test_pb2.RequestList(namelist=str(x))
+        pass
+    pass
+
+the_iter = request_iterator()
+response = stub.PostList(the_iter)

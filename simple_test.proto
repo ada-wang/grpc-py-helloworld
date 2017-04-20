@@ -1,0 +1,26 @@
+syntax="proto3";
+
+package simpletest;
+
+service SimpleTest {
+    rpc GetOne (RequestOne) returns (ResponseOne);
+    rpc GetList (RequestOne) returns (stream ResponseList);
+    rpc PostList (stream RequestList) returns (ResponseOne);
+    rpc PostAndPost (stream RequestList) returns (stream ResponseList);
+}
+
+message RequestOne {
+    string hello = 1;
+}
+
+message ResponseOne {
+    string result = 1;
+}
+
+message RequestList {
+    string namelist = 1;
+}
+
+message ResponseList {
+    string resultlist = 1;
+}
